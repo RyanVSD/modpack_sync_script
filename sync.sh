@@ -7,10 +7,11 @@ warn() { echo "[sync] WARNING: $*" >&2; }
 REPO="${GITHUB_REPO:-}"
 BRANCH="${GITHUB_BRANCH:-main}"
 MIRROR="${SYNC_MIRROR:-mods config}"
+SIDE="${PACKWIZ_SIDE:-server}"
 SKIP=".git .github .gitignore .gitattributes README.md LICENSE LICENSE.md sync.sh"
 BOOTSTRAP_URL="https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar"
 
-[-z "$REPO"] && {log "GITHUB_REPO not set"; exit 0; }
+[ -z "$REPO"] && { log "GITHUB_REPO not set"; exit 0; }
 
 REPO="${REPO#https://github.com/}"; REPO="${REPO#http://github.com/}"
 REPO="${REPO%/}"; REPO="${REPO%.git}"
@@ -49,6 +50,7 @@ if [ -n "$prev_mode" ] && [ "$prev_mode" != "$MODE" ]; then
 fi
 code="$(curl -sSL --max-time 20 "${auth[@]}" -H 'Accept: application/vnd.github.raw' \
         -o /dev/null -w '%{http_code}' "${API}/contents/pack.toml?ref=${remote_sha}")"
+
 case "$code" in
   200) MODE="packwiz" ;;
   404) MODE="jar" ;;
@@ -56,12 +58,6 @@ case "$code" in
 esac
 log "${REPO}@${BRANCH} (${remote_sha:0:7}) -> ${MODE} mode"
 
-# switching modes: old mods aren't tracked by the new mode, so start clean to avoid duplicates
-prev_mode="$(cat .sync_mode 2>/dev/null)"
-if [ -n "$prev_mode" ] && [ "$prev_mode" != "$MODE" ]; then
-  warn "mode changed (${prev_mode} -> ${MODE}); clearing mods/ and packwiz state"
-  rm -rf mods packwiz.json
-fi
 # download via packwiz
 if [ "$MODE" = "packwiz" ]; then
   if [ -n "${GITHUB_TOKEN:-}" ]; then
