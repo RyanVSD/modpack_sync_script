@@ -1,5 +1,5 @@
 #!/bin/bash
-cd "${SERVER_ROOT:~/home/container" || exit 1
+cd "${SERVER_ROOT:-/home/container}" || exit 1
 
 log() { echo "[sync] $*"; }
 warn() { echo "[sync] WARNING: $*" >&2; }
