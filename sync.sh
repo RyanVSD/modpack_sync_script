@@ -8,6 +8,7 @@ REPO="${GITHUB_REPO:-}"
 BRANCH="${GITHUB_BRANCH:-main}"
 MIRROR="${SYNC_MIRROR:-mods config}"
 SKIP=".git .github .gitignore .gitattributes README.md LICENSE LICENSE.md sync.sh"
+BOOTSTRAP_URL="https://github.com/packwiz/packwiz-installer-bootstrap/releases/latest/download/packwiz-installer-bootstrap.jar"
 
 [-z "$REPO"] && {log "GITHUB_REPO not set"; exit 0; }
 
@@ -30,8 +31,64 @@ if [ "$(cat .sync_sha 2>/dev/null)" = "$remote_sha" ] && [ -d mods ]; then
   exit 0
 fi
 
-# download
-log "updating to ${REPO}@${BRANCH} (${remote_sha:0:7})"
+# check for packwiz.toml at root
+code="$(curl -sSL --max-time 20 "${auth[@]}" -H 'Accept: application/vnd.github.raw' \
+        -o /dev/null -w '%{http_code}' "${API}/contents/pack.toml?ref=${remote_sha}")"
+case "$code" in
+  200) MODE="packwiz" ;;
+  404) MODE="jar" ;;
+  *)   warn "could not inspect repo contents (HTTP ${code:-none}); using existing files"; exit 0 ;;
+esac
+log "${REPO}@${BRANCH} (${remote_sha:0:7}) -> ${MODE} mode"
+
+# switching modes: old mods aren't tracked by the new mode, so start clean to avoid duplicates
+prev_mode="$(cat .sync_mode 2>/dev/null)"
+if [ -n "$prev_mode" ] && [ "$prev_mode" != "$MODE" ]; then
+  warn "mode changed (${prev_mode} -> ${MODE}); clearing mods/ and packwiz state"
+  rm -rf mods packwiz.json
+fi
+code="$(curl -sSL --max-time 20 "${auth[@]}" -H 'Accept: application/vnd.github.raw' \
+        -o /dev/null -w '%{http_code}' "${API}/contents/pack.toml?ref=${remote_sha}")"
+case "$code" in
+  200) MODE="packwiz" ;;
+  404) MODE="jar" ;;
+  *)   warn "could not inspect repo contents (HTTP ${code:-none}); using existing files"; exit 0 ;;
+esac
+log "${REPO}@${BRANCH} (${remote_sha:0:7}) -> ${MODE} mode"
+
+# switching modes: old mods aren't tracked by the new mode, so start clean to avoid duplicates
+prev_mode="$(cat .sync_mode 2>/dev/null)"
+if [ -n "$prev_mode" ] && [ "$prev_mode" != "$MODE" ]; then
+  warn "mode changed (${prev_mode} -> ${MODE}); clearing mods/ and packwiz state"
+  rm -rf mods packwiz.json
+fi
+# download via packwiz
+if [ "$MODE" = "packwiz" ]; then
+  if [ -n "${GITHUB_TOKEN:-}" ]; then
+    warn "packwiz mode downloads via public raw URLs; the token is not used, so the repo must be public"
+  fi
+  if [ ! -s packwiz-installer-bootstrap.jar ]; then
+    log "downloading packwiz-installer-bootstrap"
+    if ! curl -fsSL --retry 3 --max-time 120 "$BOOTSTRAP_URL" -o .bootstrap.tmp; then
+      rm -f .bootstrap.tmp; warn "could not download packwiz-installer-bootstrap; using existing files"; exit 0
+    fi
+    mv .bootstrap.tmp packwiz-installer-bootstrap.jar
+  fi
+  # pinned to the commit so a stale branch cache can't give a half-updated pack
+  PACK_URL="https://raw.githubusercontent.com/${REPO}/${remote_sha}/pack.toml"
+  log "running packwiz-installer (side: ${SIDE})"
+  if java -jar packwiz-installer-bootstrap.jar -g -s "$SIDE" "$PACK_URL"; then
+    echo "$remote_sha" > .sync_sha
+    echo "packwiz" > .sync_mode
+    log "done"
+  else
+    warn "packwiz-installer failed (see output above; a CurseForge mod that blocks third-party downloads is a common cause); will retry next boot"
+  fi
+  exit 0
+fi
+
+# download via jars
+log "downloading repo"
 rm -rf .sync.new && mkdir -p .sync.new
 if ! curl -fsSL --retry 3 --max-time 900 "${auth[@]}" "${API}/tarball/${remote_sha}" | tar -xz -C .sync.new --strip-components=1; then
   rm -rf .sync.new
@@ -39,7 +96,6 @@ if ! curl -fsSL --retry 3 --max-time 900 "${auth[@]}" "${API}/tarball/${remote_s
   exit 0
 fi
 
-# sync
 shopt -s dotglob nullglob
 for src in .sync.new/*; do
   name="$(basename "$src")"
@@ -63,6 +119,7 @@ shopt -u dotglob nullglob
 # cleanup 
 rm -rf .sync.new
 echo "$remote_sha" > .sync_sha
+echo "jar" > .sync_mode
 log "done"
 exit 0
 
